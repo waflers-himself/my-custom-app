@@ -1,0 +1,23 @@
+{
+  "items": [],
+  "conversations": [
+    {
+      "id": 1,
+      "title": "Morning Prep",
+      "summary": "Summarize commute and weather.",
+      "assistantMessage": "Weather briefing: Cool and windy in New York. A dynamic route with light traffic on main roads. Consider a jacket."
+    },
+    {
+      "id": 2,
+      "title": "Training Plan",
+      "summary": "Create a recovery-focused routine.",
+      "assistantMessage": "Your training plan is set with better recovery windows and adaptive pacing."
+    },
+    {
+      "id": 3,
+      "title": "Trip notes",
+      "summary": "Log final data for June.",
+      "assistantMessage": "Trip notes are ready for final review; ensure inventory and schedule updates are synced."
+    }
+  ]
+}

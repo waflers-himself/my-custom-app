@@ -13,6 +13,7 @@ const storageFile = path.join(__dirname, 'data.json');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
+app.use(express.json({ limit: '10mb' })); // <-- Update this line in server.js[cite: 1]
 
 let db;
 let sqliteAvailable = false;
@@ -161,6 +162,153 @@ const deleteItemById = async (id) => {
   await saveFallbackStore();
   return { changes: 1 };
 };
+
+const SYSTEM_PROMPT = `
+You are an expert e-bike technician and electrical engineer.
+When analyzing an issue or image:
+1. OBSERVATIONS: Identify key symptoms, error codes, or visual defects.
+2. PRELIMINARY CHECKS: Suggest safe, non-destructive tests (e.g. multimeter checks on battery/controller, connector inspection).
+3. STEP-BY-STEP ISOLATION: Process-of-elimination troubleshooting guide.
+4. PROBABLE CAUSES: Rank potential issues from cheapest/easiest fix to most expensive fix.
+NEVER jump straight to declaring a major component dead without suggesting verification steps first.
+`;
+
+// Helper: Call Gemini
+async function callGemini(prompt, imageUrl) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return "Gemini: API key missing in .env";
+
+  try {
+    const parts = [{ text: `${SYSTEM_PROMPT}\n\nUser Question: ${prompt}` }];
+    if (imageUrl) {
+      const base64Data = imageUrl.split(',')[1];
+      const mimeType = imageUrl.split(';')[0].split(':')[1];
+      parts.push({ inline_data: { mime_type: mimeType, data: base64Data } });
+    }
+
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts }] })
+    });
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini could not process request.";
+  } catch (err) {
+    return `Gemini Error: ${err.message}`;
+  }
+}
+
+// Helper: Call Groq (Llama 3)
+async function callGroq(prompt, imageUrl) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return "Groq: API key missing in .env";
+
+  try {
+    const messages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: prompt }
+    ];
+
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages
+      })
+    });
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || "Groq could not process request.";
+  } catch (err) {
+    return `Groq Error: ${err.message}`;
+  }
+}
+
+// Helper: Call Azure OpenAI (GPT-4o mini)
+async function callAzureOpenAI(promptText, imageUrl) {
+  const apiKey = process.env.AZURE_OPENAI_KEY;
+  const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
+  if (!apiKey || !endpoint) return "Azure OpenAI: Credentials missing in .env";
+
+  try {
+    const userContent = [{ type: "text", text: promptText }];
+    if (imageUrl) {
+      userContent.push({ type: "image_url", image_url: { url: imageUrl } });
+    }
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userContent }
+        ]
+      })
+    });
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || "Azure OpenAI could not process request.";
+  } catch (err) {
+    return `Azure Error: ${err.message}`;
+  }
+}
+
+// POST /api/diagnose Endpoint
+app.post('/api/diagnose', async (req, res) => {
+  try {
+    const { prompt, imageUrl, modelMode } = req.body;
+    if (!prompt && !imageUrl) {
+      return res.status(400).json({ error: "Please provide a symptom description or an image." });
+    }
+
+    if (modelMode === 'gemini-flash') {
+      const responseText = await callGemini(prompt, imageUrl);
+      return res.json({ result: responseText });
+    }
+
+    if (modelMode === 'groq-llama3') {
+      const responseText = await callGroq(prompt, imageUrl);
+      return res.json({ result: responseText });
+    }
+
+    if (modelMode === 'azure-gpt4o') {
+      const responseText = await callAzureOpenAI(prompt, imageUrl);
+      return res.json({ result: responseText });
+    }
+
+    // Consensus Mode: Run all 3 parallelly + synthesize
+    const [reportGemini, reportGroq, reportAzure] = await Promise.all([
+      callGemini(prompt, imageUrl),
+      callGroq(prompt, imageUrl),
+      callAzureOpenAI(prompt, imageUrl)
+    ]);
+
+    const synthesisPrompt = `
+You are the Lead Master E-Bike Technician. Compare the reports below from 3 junior technicians and synthesize them into ONE definitive, highly organized step-by-step master diagnostic guide. Eliminate contradictions and pick the safest troubleshooting steps:
+
+Report 1 (Gemini): ${reportGemini}
+Report 2 (Groq): ${reportGroq}
+Report 3 (Azure): ${reportAzure}
+`;
+
+    const finalMasterReport = await callAzureOpenAI(synthesisPrompt, null);
+
+    return res.json({
+      result: finalMasterReport,
+      rawReports: { reportGemini, reportGroq, reportAzure }
+    });
+
+  } catch (error) {
+    console.error("Diagnostic error:", error);
+    res.status(500).json({ error: "Failed to execute diagnostic check." });
+  }
+});
 
 app.get('/api/items', async (req, res) => {
   try {

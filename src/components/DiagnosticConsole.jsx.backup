@@ -45,7 +45,7 @@ const AVAILABLE_MODELS = [
 ];
 
 export default function DiagnosticConsole() {
-  const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS.find(m => m.id === 'groq') || AVAILABLE_MODELS[0]);
+  const [selectedModel, setSelectedModel] = useState(AVAILABLE_MODELS[0]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [imageBase64, setImageBase64] = useState(null);
